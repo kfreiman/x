@@ -8,7 +8,6 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/go-playground/validator/v10 v10.22.1
 	github.com/mcuadros/go-defaults v1.2.0
-	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
 )
 
