@@ -1,6 +1,9 @@
 package config
 
 import (
+	"log/slog"
+	"os"
+
 	"github.com/DarthSim/godotenv"
 	"github.com/caarlos0/env/v11"
 	"github.com/go-playground/validator/v10"
@@ -40,9 +43,13 @@ func Load(dest interface{}, opts ...Option) error {
 	}
 
 	if !options.skipEnv {
-		err := godotenv.Load()
-		if err != nil {
-			return err
+		if _, err := os.Stat("./.env"); os.IsNotExist(err) {
+			slog.Debug("env file does not exists")
+		} else {
+			err := godotenv.Load()
+			if err != nil {
+				return err
+			}
 		}
 	}
 
