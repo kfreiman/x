@@ -8,10 +8,17 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/fatih/color"
+	"github.com/mdobak/go-xerrors"
 )
+
+type Config struct {
+	Level string `env:"LEVEL" default:"info"`
+	JSON  bool   `env:"JSON" default:"true"`
+}
 
 type PrettyHandlerOptions struct {
 	SlogOpts slog.HandlerOptions
@@ -20,6 +27,12 @@ type PrettyHandlerOptions struct {
 type PrettyHandler struct {
 	slog.Handler
 	l *log.Logger
+}
+
+type stackFrame struct {
+	Func   string `json:"func"`
+	Source string `json:"source"`
+	Line   int    `json:"line"`
 }
 
 func (h *PrettyHandler) Handle(ctx context.Context, r slog.Record) error {
@@ -38,18 +51,14 @@ func (h *PrettyHandler) Handle(ctx context.Context, r slog.Record) error {
 
 	fields := make(map[string]interface{}, r.NumAttrs())
 	r.Attrs(func(a slog.Attr) bool {
-		// Special handling for error attributes
-		if a.Key == "error" {
+		switch a.Value.Kind() {
+		case slog.KindAny:
 			switch v := a.Value.Any().(type) {
 			case error:
-				fields[a.Key] = v.Error()
-			case string:
-				fields[a.Key] = v
-			default:
-				fields[a.Key] = fmt.Sprint(v)
+				a.Value = slog.StringValue(v.Error())
 			}
-			return true
 		}
+
 		// Handle other attributes normally
 		fields[a.Key] = a.Value.Any()
 		return true
@@ -75,6 +84,64 @@ func (h *PrettyHandler) Handle(ctx context.Context, r slog.Record) error {
 	return nil
 }
 
+func replaceAttr(_ []string, a slog.Attr) slog.Attr {
+	switch a.Value.Kind() {
+	case slog.KindAny:
+		switch v := a.Value.Any().(type) {
+		case error:
+			a.Value = slog.StringValue(v.Error())
+		}
+	}
+
+	return a
+}
+
+// marshalStack extracts stack frames from the error
+func marshalStack(err error) []stackFrame {
+	trace := xerrors.StackTrace(err)
+	if len(trace) == 0 {
+		return nil
+	}
+
+	frames := trace.Frames()
+
+	s := make([]stackFrame, len(frames))
+
+	for i, v := range frames {
+		f := stackFrame{
+			Source: filepath.Join(
+				filepath.Base(filepath.Dir(v.File)),
+				filepath.Base(v.File),
+			),
+			Func: filepath.Base(v.Function),
+			Line: v.Line,
+		}
+
+		s[i] = f
+	}
+
+	return s
+}
+
+// fmtErr returns a slog.Value with keys `msg` and `trace`. If the error
+// does not implement interface { StackTrace() errors.StackTrace }, the `trace`
+// key is omitted.
+func fmtErr(err error) slog.Value {
+	var groupValues []slog.Attr
+
+	groupValues = append(groupValues, slog.String("msg", err.Error()))
+
+	frames := marshalStack(err)
+
+	if frames != nil {
+		groupValues = append(groupValues,
+			slog.Any("trace", frames),
+		)
+	}
+
+	return slog.GroupValue(groupValues...)
+}
+
 func NewPrettyHandler(
 	out io.Writer,
 	opts PrettyHandlerOptions,
@@ -92,13 +159,14 @@ func NewPrettyHandlerWithDefaults(level slog.Level) *PrettyHandler {
 		os.Stdout,
 		PrettyHandlerOptions{
 			SlogOpts: slog.HandlerOptions{
-				Level:     level,
-				AddSource: true,
+				Level:       level,
+				AddSource:   true,
+				ReplaceAttr: replaceAttr,
 			},
 		},
 	)
 }
 
 func NewJSONHandlerWithDefaults(level slog.Level) *slog.JSONHandler {
-	return slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level, AddSource: true})
+	return slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level, AddSource: true, ReplaceAttr: replaceAttr})
 }
